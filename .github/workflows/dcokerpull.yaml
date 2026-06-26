@@ -18,10 +18,6 @@ on:
           - arm/v7
           - arm/v6
 
-env:
-  # 将架构名称映射为文件名友好格式（arm/v7 → arm_v7）
-  ARCH_SAFE: ${{ replace(inputs.architecture, '/', '_') }}
-
 jobs:
   pull-and-package:
     runs-on: ubuntu-latest
