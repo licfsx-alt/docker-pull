@@ -1,0 +1,135 @@
+name: PullPackage Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Docker 镜像名称（如 nginx:latest 或 alpine:3.18）"
+        required: true
+        default: "nginx:latest"
+      architecture:
+        description: "目标架构"
+        required: true
+        default: "amd64"
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - arm/v7
+          - arm/v6
+
+jobs:
+  pull-and-package:
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_name: ${{ steps.meta.outputs.image_name }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      architecture: ${{ steps.meta.outputs.architecture }}
+      arch_safe: ${{ steps.meta.outputs.arch_safe }}
+      filename: ${{ steps.meta.outputs.filename }}
+
+    steps:
+      # ── 1. 解析镜像名 & 架构元数据 ────────────────────────────────────────
+      - name: 解析元数据
+        id: meta
+        run: |
+          IMAGE="${{ inputs.image }}"
+          ARCH="${{ inputs.architecture }}"
+
+          # 拆分 name:tag
+          IMAGE_NAME="${IMAGE%%:*}"
+          IMAGE_TAG="${IMAGE##*:}"
+          [ "$IMAGE_TAG" = "$IMAGE_NAME" ] && IMAGE_TAG="latest"
+
+          # 文件名安全的架构字符串（arm/v7 → arm_v7）
+          ARCH_SAFE="${ARCH//\//_}"
+
+          # 文件名安全的镜像名（nginx → nginx，library/nginx → library_nginx）
+          IMAGE_NAME_SAFE="${IMAGE_NAME//\//_}"
+
+          # 最终 tar.gz 文件名
+          FILENAME="${IMAGE_NAME_SAFE}_${IMAGE_TAG}_${ARCH_SAFE}.tar.gz"
+
+          echo "image_name=${IMAGE_NAME}"   >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"     >> "$GITHUB_OUTPUT"
+          echo "architecture=${ARCH}"       >> "$GITHUB_OUTPUT"
+          echo "arch_safe=${ARCH_SAFE}"     >> "$GITHUB_OUTPUT"
+          echo "filename=${FILENAME}"       >> "$GITHUB_OUTPUT"
+
+          echo "### 📦 镜像信息" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 字段 | 值 |"   >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-----|"  >> "$GITHUB_STEP_SUMMARY"
+          echo "| 镜像 | \`${IMAGE}\` |"             >> "$GITHUB_STEP_SUMMARY"
+          echo "| 架构 | \`${ARCH}\` |"             >> "$GITHUB_STEP_SUMMARY"
+          echo "| 输出文件 | \`${FILENAME}\` |"      >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 2. 设置 QEMU（支持跨架构 pull）─────────────────────────────────
+      - name: 设置 QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      # ── 3. 设置 Docker Buildx ─────────────────────────────────────────
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── 4. Pull 指定架构的镜像 ────────────────────────────────────────
+      - name: Pull 镜像（${{ inputs.architecture }}）
+        run: |
+          docker pull \
+            --platform linux/${{ inputs.architecture }} \
+            ${{ inputs.image }}
+
+          # 验证拉取成功并打印信息
+          echo "✅ 成功拉取镜像"
+          docker image inspect \
+            --format '镜像 ID: {{.Id}}\n架构: {{.Architecture}}/{{.Variant}}\n大小: {{.Size}} bytes' \
+            ${{ inputs.image }}
+
+      # ── 5. 导出为 tar 并压缩为 .tar.gz ──────────────────────────────
+      - name: 打包为 tar.gz
+        run: |
+          FILENAME="${{ steps.meta.outputs.filename }}"
+
+          echo "📦 正在导出镜像为 tar..."
+          docker save ${{ inputs.image }} | gzip -9 > "${FILENAME}"
+
+          SIZE=$(du -sh "${FILENAME}" | cut -f1)
+          echo "✅ 打包完成：${FILENAME}（${SIZE}）"
+
+          echo "| 文件大小 | \`${SIZE}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 6. 上传 Artifact ─────────────────────────────────────────────
+      - name: 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.filename }}
+          path: ${{ steps.meta.outputs.filename }}
+          retention-days: 7
+          if-no-files-found: error
+
+      # ── 7. 打印所有输出变量（方便下游 job 使用）────────────────────
+      - name: 输出变量摘要
+        run: |
+          echo "==============================="
+          echo "  可供下游 Job 使用的输出变量"
+          echo "==============================="
+          echo "image_name  : ${{ steps.meta.outputs.image_name }}"
+          echo "image_tag   : ${{ steps.meta.outputs.image_tag }}"
+          echo "architecture: ${{ steps.meta.outputs.architecture }}"
+          echo "arch_safe   : ${{ steps.meta.outputs.arch_safe }}"
+          echo "filename    : ${{ steps.meta.outputs.filename }}"
+
+  # ── 可选：下游 Job 示例（演示如何引用输出变量）─────────────────────────
+  downstream-example:
+    runs-on: ubuntu-latest
+    needs: pull-and-package
+    steps:
+      - name: 使用上游输出变量
+        run: |
+          echo "镜像名称 : ${{ needs.pull-and-package.outputs.image_name }}"
+          echo "镜像标签 : ${{ needs.pull-and-package.outputs.image_tag }}"
+          echo "目标架构 : ${{ needs.pull-and-package.outputs.architecture }}"
+          echo "安全架构 : ${{ needs.pull-and-package.outputs.arch_safe }}"
+          echo "打包文件 : ${{ needs.pull-and-package.outputs.filename }}"
