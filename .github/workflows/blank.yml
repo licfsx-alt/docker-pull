@@ -1,4 +1,4 @@
-name: PullPackage Docker Image
+name: Pull & Package Docker Image
 
 on:
   workflow_dispatch:
@@ -84,7 +84,7 @@ jobs:
           # 验证拉取成功并打印信息
           echo "✅ 成功拉取镜像"
           docker image inspect \
-            --format '镜像 ID: {{.Id}}\n架构: {{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}\n大小: {{.Size}} bytes' \
+            --format '镜像 ID: {{.Id}}{{"\n"}}架构: {{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}{{"\n"}}大小: {{.Size}} bytes' \
             ${{ inputs.image }}
 
       # ── 5. 导出为 tar 并压缩为 .tar.gz ──────────────────────────────
